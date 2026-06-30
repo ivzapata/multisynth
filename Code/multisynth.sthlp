@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.6.0  29jun2026}{...}
+{* *! version 0.8.3  30jun2026}{...}
 {cmd:help multisynth}
 {hline}
 {vieweralsosee "" "--"}{...}
@@ -19,13 +19,16 @@
 {phang}
 {bf:multisynth} {hline 2} Synthetic control method for multiple treated units, with staggered adoption and event-time aggregation
 
+{phang}
+{it:Version 0.8.3 -- last updated 30jun2026}
+
 {marker syntax}{...}
 {title:Syntax}
 
 {p 8 17 2}
 {cmd:multisynth} {depvar}{cmd:,}
 {opt tru:nit(numlist)}
-{opt trp:eriod(unit: # [|| unit: # ...])}
+{opt trp:eriod(# | unit: # [|| unit: # ...])}
 {opt pred:ictors(unit: varlist [|| unit: varlist ...])}
 [{it:options}]
 
@@ -34,7 +37,7 @@
 {synoptline}
 {syntab:Required}
 {synopt:{opt tru:nit(numlist)}}list of treated unit numbers (one or more){p_end}
-{synopt:{opt trp:eriod(unit: # || ...)}}treatment time for each treated unit (keyed){p_end}
+{synopt:{opt trp:eriod(# | unit: # || ...)}}treatment time: one common #, or keyed per unit{p_end}
 {synopt:{opt pred:ictors(unit: varlist || ...)}}predictor list for each treated unit (keyed){p_end}
 
 {syntab:Per-unit periods (keyed; optional)}
@@ -44,13 +47,13 @@
 {synopt:{opt mspep:eriod(unit: numlist || ...)}}MSPE-minimization periods, per unit{p_end}
 
 {syntab:Donor pool and output}
-{synopt:{opth cou:nit(numlist)}}override the donor pool (default: never-treated units){p_end}
+{synopt:{opt cou:nit(numlist | unit: numlist || ...)}}donor pool: shared list, or keyed per treated unit (default: never-treated){p_end}
 {synopt:{opt saver:esults(folder)}}output folder (default: {bf:multisynth_results}){p_end}
 {synopt:{opt det:ail}}show full per-unit {bf:synth2} output (default: compact){p_end}
 {synopt:{opt nofig:ure}}do not build any graphs{p_end}
 
 {syntab:Passed through to the per-unit engine}
-{synopt:{it:synth2 options}}e.g. {opt nested}, {opt allopt}, {opt placebo()}, {opt loo}, {opt customV()}, {opt sigf()}, ...{p_end}
+{synopt:{it:synth2 options}}e.g. {opt nested}, {opt allopt}, {opt placebo()}, {opt customV()}, {opt sigf()}, ...{p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}{helpb xtset} {it:panelvar} {it:timevar} must be used to declare a balanced panel in the usual long form; see {manhelp xtset XT:xtset}.{p_end}
@@ -93,10 +96,12 @@ method.
 declared by {helpb xtset} {it:panelvar}.
 
 {phang}
-{opt trperiod(unit: # [|| unit: # ...])} the treatment time for {bf:each} treated unit, keyed by
-unit number and separated by {cmd:||}; e.g. {cmd:trperiod(3: 1989 || 30: 1985)}. Every unit listed
-in {opt trunit()} must have an entry. If all units share the same time, adoption is simultaneous;
-otherwise it is staggered.
+{opt trperiod(# | unit: # [|| unit: # ...])} the treatment time(s). Give a single unkeyed integer
+(e.g. {cmd:trperiod(1989)}) to apply one {bf:common} time to all treated units (simultaneous
+adoption). Or give a {bf:keyed} specification (a {it:unit:} key per time, separated by {cmd:||};
+e.g. {cmd:trperiod(3: 1989 || 30: 1985)}), in which case {bf:every} unit in {opt trunit()} must have
+an entry. Adoption is {bf:simultaneous} when all units share a time and {bf:staggered} otherwise;
+the run banner reports which.
 
 {phang}
 {opt predictors(unit: varlist [|| unit: varlist ...])} the predictor (covariate) list for {bf:each}
@@ -130,9 +135,13 @@ different times. Omit an option to let each unit use its {helpb synth2} default.
 {dlgtab:Donor pool and output}
 
 {phang}
-{opth counit(numlist)} overrides the donor pool with an explicit list of control unit numbers. By
-default the donor pool is all {bf:never-treated} units (every unit in {opt trunit()} is excluded),
-and the same pool is used for every treated unit.
+{opt counit(numlist | unit: numlist || unit: numlist ...)} overrides the donor pool. By default the
+pool is all {bf:never-treated} units (every unit in {opt trunit()} is excluded), shared by every
+treated unit. An unkeyed {it:numlist} is used as a single shared pool for all treated units. A
+{bf:keyed} specification (each list prefixed by a {it:unit:} key and separated by {cmd:||}, as in
+{opt predictors()}) assigns a separate donor pool to each treated unit; in keyed form {bf:every}
+treated unit must have an entry. No treated unit may appear in any donor list. When keyed pools are
+used, each unit's pool also drives its own placebo and pooled-inference null.
 
 {phang}
 {opt saveresults(folder)} the folder (created if needed, in the current working directory) where
@@ -151,7 +160,7 @@ and saved as {bf:.gph} files in the output folder.
 
 {phang}
 Any other {helpb synth2} option (e.g. {opt nested}, {opt allopt}, {opt customV()}, {opt margin()},
-{opt maxiter()}, {opt sigf()}, {opt bound()}, {opt placebo()}, {opt loo}) is passed through to each
+{opt maxiter()}, {opt sigf()}, {opt bound()}, {opt placebo()}) is passed through to each
 per-unit estimation. When {cmd:placebo(unit)} is requested, the in-space placebo p-value (the
 fraction of units whose post/pre MSPE ratio is at least as large as the treated unit's) is reported
 per unit and stored in {bf:summary.dta}. See {helpb synth2} for these options. Note that
@@ -162,14 +171,17 @@ manages frames and graph saving itself.
 {title:Output files}
 
 {pstd}
-All files are written under the {opt saveresults()} folder (default {bf:multisynth_results}):
+All files are written under the {opt saveresults()} folder (default {bf:multisynth_results}), in two
+subfolders: {bf:units/} (per-unit files) and {bf:aggregate/} (cross-unit aggregate and inference files):
 
-{phang}{bf:summary.dta} {hline 2} one row per treated unit: {cmd:trunit uname trperiod att pre_rmspe r2 n_donors t_pre t_post mspe_pval} ({cmd:mspe_pval} is filled only when a placebo test was run).{p_end}
-{phang}{bf:aggregate.dta} {hline 2} the equal-weighted average path over the balanced event window: {cmd:reltime}, treated average, synthetic average, ATT, and number of units averaged.{p_end}
-{phang}{bf:v_matrix.dta} {hline 2} combined covariate balance / V-weights, one block per unit: {cmd:trunit uname covariate Weight Treated Synthetic Control}.{p_end}
-{phang}{bf:weights.dta} {hline 2} combined nonzero donor weights: {cmd:trunit uname donor Weight}.{p_end}
-{phang}{bf:unit}{it:#}{bf:_data.dta} {hline 2} the full per-unit series (observed, synthetic, gap) for each treated unit.{p_end}
-{phang}{bf:unit}{it:#}{bf:_*.gph}, {bf:aggregate_pred.gph}, {bf:aggregate_eff.gph} {hline 2} per-unit and aggregate graphs (unless {opt nofigure}).{p_end}
+{phang}{bf:units/unit}{it:#}{bf:_data.dta} {hline 2} the full per-unit series (observed, synthetic, gap) for each treated unit.{p_end}
+{phang}{bf:units/unit}{it:#}{bf:_*.gph} {hline 2} per-unit graphs (unless {opt nofigure}).{p_end}
+{phang}{bf:aggregate/summary.dta} {hline 2} one row per treated unit: {cmd:trunit uname trperiod att pre_rmspe r2 n_donors t_pre t_post mspe_pval} ({cmd:mspe_pval} is filled only when a placebo test was run).{p_end}
+{phang}{bf:aggregate/aggregate.dta} {hline 2} the equal-weighted average path over the balanced event window: {cmd:reltime}, treated average, synthetic average, ATT, and number of units averaged.{p_end}
+{phang}{bf:aggregate/aggregate_pred.gph}, {bf:aggregate/aggregate_eff.gph} {hline 2} aggregate event-time graphs (unless {opt nofigure}).{p_end}
+{phang}{bf:aggregate/v_matrix.dta} {hline 2} combined covariate balance / V-weights, one block per unit: {cmd:trunit uname covariate Weight Treated Synthetic Control}.{p_end}
+{phang}{bf:aggregate/weights.dta} {hline 2} combined nonzero donor weights: {cmd:trunit uname donor Weight}.{p_end}
+{phang}{bf:aggregate/pvalues.dta}, {bf:aggregate/pooled_pval*_pboUnit.gph} {hline 2} pooled permutation-inference p-values and graphs (only when {cmd:placebo(unit)} was requested).{p_end}
 
 {marker results}{...}
 {title:Stored results}
@@ -185,6 +197,7 @@ All files are written under the {opt saveresults()} folder (default {bf:multisyn
 {synopt:{cmd:e(att_overall)}}overall ATT (mean averaged gap over event time >= 0){p_end}
 {synopt:{cmd:e(ev_min)}}lower bound of the balanced event window{p_end}
 {synopt:{cmd:e(ev_max)}}upper bound of the balanced event window{p_end}
+{synopt:{cmd:e(pre_rmspe_pooled)}}pooled pre-treatment RMSPE (pre-period fit of the averaged synthetic){p_end}
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Macros}{p_end}

@@ -1,4 +1,4 @@
-*! multisynth 0.7.0  (based on synth2 2.1.0 by Yan and Chen)  29jun2026
+*! multisynth 0.8.3  (based on synth2 2.1.0 by Yan and Chen)  30jun2026
 *  Runs the synthetic control method iteratively over multiple treated units, each with its
 *  own predictor list, treatment time (staggered allowed), and matching/evaluation windows,
 *  saving per-unit results to a folder, then aggregates the per-unit effects on event
@@ -10,7 +10,7 @@ program multisynth, eclass
 	version 16
 
 	syntax anything, TRUnit(numlist integer sort) TRPeriod(string) PREDictors(string) ///
-		[ SAVEResults(string) COUnit(numlist integer sort) FRAme(string) noFIGure ///
+		[ SAVEResults(string) COUnit(string) FRAme(string) noFIGure ///
 		  XPeriod(string) PREPeriod(string) POSTPeriod(string) MSPEPeriod(string) ///
 		  DETail * ]
 
@@ -76,52 +76,71 @@ program multisynth, eclass
 		exit 198
 	}
 
-	* parse trperiod(): keyed per-unit treatment times, separated by "||"
-	*   e.g. trperiod( 3: 1989 || 30: 1985 )
+	* parse trperiod(): polymorphic, mirroring counit()/predictors():
+	*   - one unkeyed integer (e.g. trperiod(1989))  -> common time, all units (simultaneous)
+	*   - keyed (e.g. trperiod(3: 1989 || 30: 1985)) -> per-unit times; every unit required
 	local traw `"`trperiod'"'
 	local tseen ""
 	local ttimes ""
-	while `"`traw'"' != "" {
-		if strpos(`"`traw'"', "||") {
-			local grp = substr(`"`traw'"', 1, strpos(`"`traw'"', "||") - 1)
-			local traw = substr(`"`traw'"', strpos(`"`traw'"', "||") + 2, .)
-		}
-		else {
-			local grp `"`traw'"'
-			local traw ""
-		}
-		local grp = strtrim(`"`grp'"')
-		if "`grp'" == "" continue
-		local cpos = strpos("`grp'", ":")
-		if `cpos' == 0 {
-			di as err `"trperiod(): group "`grp'" needs a "unit:" key, e.g. trperiod(3: 1989 || 30: 1985)"'
-			exit 198
-		}
-		local key  = strtrim(substr("`grp'", 1, `cpos' - 1))
-		local tval = strtrim(substr("`grp'", `cpos' + 1, .))
-		local ok : list key in trunit
-		if !`ok' {
-			di as err "trperiod(): unit `key' is not in trunit()"
-			exit 198
-		}
-		local dup : list key in tseen
-		if `dup' {
-			di as err "trperiod(): unit `key' is specified more than once"
-			exit 198
-		}
+	local keyed_trp = 0
+	if strpos(`"`traw'"', ":") | strpos(`"`traw'"', "||") local keyed_trp = 1
+
+	if !`keyed_trp' {
+		* unkeyed: one common treatment time for every treated unit
+		local tval = strtrim(`"`traw'"')
 		cap confirm integer number `tval'
-		if _rc {
-			di as err "trperiod(): treatment time for unit `key' must be an integer"
+		if (_rc) | (`: word count `tval'' != 1) {
+			di as err "trperiod(): specify one common time (e.g. trperiod(1989)) or key each unit (e.g. trperiod(3: 1989 || 30: 1985))"
 			exit 198
 		}
-		local trp_`key' "`tval'"
-		local tseen  "`tseen' `key'"
-		local ttimes "`ttimes' `tval'"
+		foreach u of numlist `trunit' {
+			local trp_`u' "`tval'"
+			local ttimes "`ttimes' `tval'"
+		}
 	}
-	local missing : list trunit - tseen
-	if "`missing'" != "" {
-		di as err "trperiod(): no treatment time specified for unit(s) `missing'"
-		exit 198
+	else {
+		while `"`traw'"' != "" {
+			if strpos(`"`traw'"', "||") {
+				local grp = substr(`"`traw'"', 1, strpos(`"`traw'"', "||") - 1)
+				local traw = substr(`"`traw'"', strpos(`"`traw'"', "||") + 2, .)
+			}
+			else {
+				local grp `"`traw'"'
+				local traw ""
+			}
+			local grp = strtrim(`"`grp'"')
+			if "`grp'" == "" continue
+			local cpos = strpos("`grp'", ":")
+			if `cpos' == 0 {
+				di as err `"trperiod(): group "`grp'" needs a "unit:" key, e.g. trperiod(3: 1989 || 30: 1985)"'
+				exit 198
+			}
+			local key  = strtrim(substr("`grp'", 1, `cpos' - 1))
+			local tval = strtrim(substr("`grp'", `cpos' + 1, .))
+			local ok : list key in trunit
+			if !`ok' {
+				di as err "trperiod(): unit `key' is not in trunit()"
+				exit 198
+			}
+			local dup : list key in tseen
+			if `dup' {
+				di as err "trperiod(): unit `key' is specified more than once"
+				exit 198
+			}
+			cap confirm integer number `tval'
+			if _rc {
+				di as err "trperiod(): treatment time for unit `key' must be an integer"
+				exit 198
+			}
+			local trp_`key' "`tval'"
+			local tseen  "`tseen' `key'"
+			local ttimes "`ttimes' `tval'"
+		}
+		local missing : list trunit - tseen
+		if "`missing'" != "" {
+			di as err "trperiod(): no treatment time specified for unit(s) `missing'"
+			exit 198
+		}
 	}
 
 	* staggered = treated units do not all share the same treatment time
@@ -185,19 +204,128 @@ program multisynth, eclass
 	* results folder, created in Stata's working directory
 	if `"`saveresults'"' == "" local saveresults "multisynth_results"
 	capture mkdir `"`saveresults'"'
+	local unitdir `"`saveresults'/units"'
+	local aggdir  `"`saveresults'/aggregate"'
+	capture mkdir `"`unitdir'"'
+	capture mkdir `"`aggdir'"'
 	di as txt _newline "multisynth: results will be saved under " as res `"`saveresults'/"' as txt " (in `c(pwd)')"
 
-	* donor pool: never-treated units only (exclude ALL treated units)
+	* donor pool(s). counit() is polymorphic, mirroring predictors():
+	*   - empty             -> never-treated units (all treated excluded), shared
+	*   - unkeyed numlist   -> one shared donor list applied to every treated unit
+	*   - keyed (unit: ...) -> a per-unit donor list (every treated unit required)
+	* No treated unit may appear in any donor list.
+	qui levelsof `panelvar', local(allunits)
+	local nevertr : list allunits - trunit
+
+	local keyed_counit = 0
+	if strpos(`"`counit'"', ":") | strpos(`"`counit'"', "||") local keyed_counit = 1
+
 	if "`counit'" == "" {
-		qui levelsof `panelvar', local(allunits)
-		local donors : list allunits - trunit
+		foreach u of numlist `trunit' {
+			local donors_`u' "`nevertr'"
+		}
+		local donors "`nevertr'"
 	}
-	else local donors "`counit'"
-	if "`donors'" == "" {
-		di as err "no donor units left after excluding the treated units"
-		exit 198
+	else if !`keyed_counit' {
+		capture numlist "`counit'", integer sort
+		if _rc {
+			di as err "counit(): invalid donor numlist: `counit'"
+			exit 198
+		}
+		local counit "`r(numlist)'"
+		local bad : list counit - allunits
+		if "`bad'" != "" {
+			di as err "counit(): unit(s) `bad' not found in `panelvar'"
+			exit 198
+		}
+		local clash : list trunit & counit
+		if "`clash'" != "" {
+			di as err "counit(): treated unit(s) `clash' cannot be donors"
+			exit 198
+		}
+		foreach u of numlist `trunit' {
+			local donors_`u' "`counit'"
+		}
+		local donors "`counit'"
 	}
-	local ndonors : word count `donors'
+	else {
+		local craw `"`counit'"'
+		local cseen ""
+		while `"`craw'"' != "" {
+			if strpos(`"`craw'"', "||") {
+				local grp = substr(`"`craw'"', 1, strpos(`"`craw'"', "||") - 1)
+				local craw = substr(`"`craw'"', strpos(`"`craw'"', "||") + 2, .)
+			}
+			else {
+				local grp `"`craw'"'
+				local craw ""
+			}
+			local grp = strtrim(`"`grp'"')
+			if `"`grp'"' == "" continue
+			local cpos = strpos(`"`grp'"', ":")
+			if `cpos' == 0 {
+				di as err `"counit(): group "`grp'" needs a "unit:" key, e.g. counit(3: 1 2 4 || 30: 5 6 7)"'
+				exit 198
+			}
+			local key  = strtrim(substr(`"`grp'"', 1, `cpos' - 1))
+			local clst = strtrim(substr(`"`grp'"', `cpos' + 1, .))
+			local ok : list key in trunit
+			if !`ok' {
+				di as err "counit(): unit `key' is not in trunit()"
+				exit 198
+			}
+			local dup : list key in cseen
+			if `dup' {
+				di as err "counit(): unit `key' is specified more than once"
+				exit 198
+			}
+			if "`clst'" == "" {
+				di as err "counit(): empty donor list for unit `key'"
+				exit 198
+			}
+			capture numlist "`clst'", integer sort
+			if _rc {
+				di as err "counit(): invalid donor numlist for unit `key': `clst'"
+				exit 198
+			}
+			local clst "`r(numlist)'"
+			local bad : list clst - allunits
+			if "`bad'" != "" {
+				di as err "counit(): unit(s) `bad' (for treated unit `key') not found in `panelvar'"
+				exit 198
+			}
+			local clash : list trunit & clst
+			if "`clash'" != "" {
+				di as err "counit(): treated unit(s) `clash' cannot be donors (for treated unit `key')"
+				exit 198
+			}
+			local donors_`key' "`clst'"
+			local cseen "`cseen' `key'"
+		}
+		local missing : list trunit - cseen
+		if "`missing'" != "" {
+			di as err "counit(): no donor list specified for unit(s) `missing'"
+			exit 198
+		}
+	}
+
+	* every treated unit must end up with a non-empty donor pool
+	foreach u of numlist `trunit' {
+		if "`donors_`u''" == "" {
+			di as err "no donor units available for treated unit `u'"
+			exit 198
+		}
+	}
+
+	* shared/default expose a single donor count; keyed exposes none
+	if `keyed_counit' {
+		local donors `"`counit'"'
+		local ndonors = .
+	}
+	else {
+		local ndonors : word count `donors'
+	}
 
 	*-----------------------------------------------------------------------------
 	* run banner
@@ -208,7 +336,13 @@ program multisynth, eclass
 	di as res " multisynth" as txt "  {c |}  synthetic control for multiple treated units"
 	di as txt "{hline 78}"
 	di as txt " Outcome          : " as res "`depvar'"
-	di as txt " Treated units    : " as res "`nt'" as txt "   Donor pool: " as res "`ndonors'" as txt " never-treated unit(s)"
+	if `keyed_counit' {
+		di as txt " Treated units    : " as res "`nt'" as txt "   Donor pool: " as res "per treated unit (keyed)"
+	}
+	else {
+		local _ptype = cond("`counit'" == "", "never-treated", "shared, user-specified")
+		di as txt " Treated units    : " as res "`nt'" as txt "   Donor pool: " as res "`ndonors'" as txt " `_ptype' unit(s)"
+	}
 	di as txt " Treatment timing : " as res "`timingtxt'"
 	di as txt " Output folder    : " as res "`saveresults'/"
 	if "`detail'" != "" di as txt " Detail mode      : " as res "on" as txt "  (full per-unit synth2 output)"
@@ -223,7 +357,7 @@ program multisynth, eclass
 	tempname pf
 	postfile `pf' int(trunit) str32(uname) int(trperiod) double(att pre_rmspe r2) ///
 		int(n_donors t_pre t_post) double(mspe_pval) ///
-		using `"`saveresults'/summary.dta"', replace
+		using `"`aggdir'/summary.dta"', replace
 	tempfile balstack wgtstack
 	local balbuilt 0
 	local wgtbuilt 0
@@ -233,6 +367,7 @@ program multisynth, eclass
 	foreach u of numlist `trunit' {
 		local ++i
 		local uname : label (`panelvar') `u'
+		local nd_u : word count `donors_`u''
 
 		* this unit's absolute-period options (keyed per unit; empty if not given)
 		local xpopt    ""
@@ -253,23 +388,23 @@ program multisynth, eclass
 		if "`detail'" != "" {
 			di as txt "{hline 78}"
 			_multisynth_unit `depvar' `pred_`u'', trunit(`u') trperiod(`trp_`u'') ///
-				counit(`donors') frame(_ms_`u') `figure' ///
+				counit(`donors_`u'') frame(_ms_`u') `figure' ///
 				`xpopt' `prepopt' `postpopt' `mspeopt' `options'
 		}
 		else {
 			quietly _multisynth_unit `depvar' `pred_`u'', trunit(`u') trperiod(`trp_`u'') ///
-				counit(`donors') frame(_ms_`u') `figure' ///
+				counit(`donors_`u'') frame(_ms_`u') `figure' ///
 				`xpopt' `prepopt' `postpopt' `mspeopt' `options'
 		}
 
 		* save this unit's graphs (.gph) -- built silently via set graphics off
 		if "`figure'" == "" {
 			foreach g in `e(graph)' {
-				capture graph save `g' `"`saveresults'/unit`u'_`g'.gph"', replace
+				capture graph save `g' `"`unitdir'/unit`u'_`g'.gph"', replace
 			}
 		}
 		* save this unit's data (.dta)
-		capture frame _ms_`u': save `"`saveresults'/unit`u'_data.dta"', replace
+		capture frame _ms_`u': save `"`unitdir'/unit`u'_data.dta"', replace
 
 		* in-space placebo p-value (MSPE ratio), only if placebo(unit) was requested
 		local pval = .
@@ -281,7 +416,7 @@ program multisynth, eclass
 
 		* summary row
 		post `pf' (`u') ("`uname'") (`trp_`u'') (e(att)) (e(rmse)) (e(r2)) ///
-			(`ndonors') (e(T0)) (e(T1)) (`pval')
+			(`nd_u') (e(T0)) (e(T1)) (`pval')
 
 		* accumulate combined covariate balance (rows = covariates)
 		capture confirm matrix e(bal)
@@ -337,7 +472,7 @@ program multisynth, eclass
 
 		* compact per-unit block (under -detail- the engine already printed everything)
 		if "`detail'" == "" {
-			di as txt "   Control units " as res "`ndonors'" ///
+			di as txt "   Control units " as res "`nd_u'" ///
 				as txt "    Pre-RMSPE " as res %6.4f e(rmse) ///
 				as txt "    R-sq " as res %5.3f e(r2) ///
 				as txt "    ATT " as res %8.3f e(att)
@@ -363,7 +498,7 @@ program multisynth, eclass
 		frame `bsf' {
 			use `"`balstack'"', clear
 			label variable trunit "treated unit id"
-			qui save `"`saveresults'/v_matrix.dta"', replace
+			qui save `"`aggdir'/v_matrix.dta"', replace
 		}
 		frame drop `bsf'
 	}
@@ -373,7 +508,7 @@ program multisynth, eclass
 		frame `wsf' {
 			use `"`wgtstack'"', clear
 			label variable trunit "treated unit id"
-			qui save `"`saveresults'/weights.dta"', replace
+			qui save `"`aggdir'/weights.dta"', replace
 		}
 		frame drop `wsf'
 	}
@@ -384,11 +519,11 @@ program multisynth, eclass
 	tempname sf
 	frame create `sf'
 	frame `sf' {
-		use `"`saveresults'/summary.dta"', clear
+		use `"`aggdir'/summary.dta"', clear
 		qui count if !missing(mspe_pval)
 		local haspval = (r(N) > 0)
 		di as txt _newline "{hline 78}"
-		di as txt " Per-unit summary" as res "   (saved to `saveresults'/summary.dta)"
+		di as txt " Per-unit summary" as res "   (saved to `aggdir'/summary.dta)"
 		if `haspval' {
 			di as txt "{hline 13}{c TT}{hline 54}"
 			di as txt %-13s " Unit" "{c |}" %7s "Treat" %8s "Donors" %12s "Pre-RMSPE" %7s "R-sq" %11s "ATT" %9s "p-val"
@@ -431,7 +566,7 @@ program multisynth, eclass
 		tempname af
 		frame create `af'
 		frame `af' {
-			use `"`saveresults'/unit`u'_data.dta"', clear
+			use `"`unitdir'/unit`u'_data.dta"', clear
 			keep if `panelvar' == `u'
 			keep `timevar' `depvar' pred`sym'`depvar' tr`sym'`depvar'
 			gen double reltime = `timevar' - `trp_`u''
@@ -499,7 +634,7 @@ program multisynth, eclass
 			tempname icf
 			frame create `icf'
 			frame `icf' {
-				use `"`saveresults'/unit`u'_data.dta"', clear
+				use `"`unitdir'/unit`u'_data.dta"', clear
 				keep `panelvar' `timevar' tr`sym'`depvar'
 				drop if missing(tr`sym'`depvar')
 				gen double _g2 = (tr`sym'`depvar')^2
@@ -543,7 +678,7 @@ program multisynth, eclass
 		* per-lead pooled test over post event times 0..evhi -> pvalues.dta
 		tempname pvf
 		postfile `pvf' int(reltime) double(avg_effect p_two p_right p_left n_perms) ///
-			using `"`saveresults'/pvalues.dta"', replace
+			using `"`aggdir'/pvalues.dta"', replace
 		forvalues L = 0/`evhi' {
 			tempname obf
 			frame create `obf'
@@ -652,28 +787,28 @@ program multisynth, eclass
 			tempname gpf
 			frame create `gpf'
 			frame `gpf' {
-				use `"`saveresults'/pvalues.dta"', clear
+				use `"`aggdir'/pvalues.dta"', clear
 				twoway connected p_two reltime, ///
 				       ytitle("two-sided pooled p-values of treatment effects on `depvar'") ///
 				       xtitle("event time (relative to treatment)") ///
 				       yline(0.05 0.1, lp(dot) lc(black)) ylabel(0(0.1)1) ///
 				       title("Pooled Permutation Inference: two-sided p-values") ///
 				       name(pooled_pvalTwo_pboUnit, replace) nodraw
-				graph save pooled_pvalTwo_pboUnit `"`saveresults'/pooled_pvalTwo_pboUnit.gph"', replace
+				graph save pooled_pvalTwo_pboUnit `"`aggdir'/pooled_pvalTwo_pboUnit.gph"', replace
 				twoway connected p_right reltime, ///
 				       ytitle("right-sided pooled p-values of treatment effects on `depvar'") ///
 				       xtitle("event time (relative to treatment)") ///
 				       yline(0.05 0.1, lp(dot) lc(black)) ylabel(0(0.1)1) ///
 				       title("Pooled Permutation Inference: right-sided p-values") ///
 				       name(pooled_pvalRight_pboUnit, replace) nodraw
-				graph save pooled_pvalRight_pboUnit `"`saveresults'/pooled_pvalRight_pboUnit.gph"', replace
+				graph save pooled_pvalRight_pboUnit `"`aggdir'/pooled_pvalRight_pboUnit.gph"', replace
 				twoway connected p_left reltime, ///
 				       ytitle("left-sided pooled p-values of treatment effects on `depvar'") ///
 				       xtitle("event time (relative to treatment)") ///
 				       yline(0.05 0.1, lp(dot) lc(black)) ylabel(0(0.1)1) ///
 				       title("Pooled Permutation Inference: left-sided p-values") ///
 				       name(pooled_pvalLeft_pboUnit, replace) nodraw
-				graph save pooled_pvalLeft_pboUnit `"`saveresults'/pooled_pvalLeft_pboUnit.gph"', replace
+				graph save pooled_pvalLeft_pboUnit `"`aggdir'/pooled_pvalLeft_pboUnit.gph"', replace
 			}
 			frame drop `gpf'
 		}
@@ -695,11 +830,17 @@ program multisynth, eclass
 		label variable pred`sym'`depvar' "synthetic average"
 		label variable tr`sym'`depvar'  "ATT (average gap)"
 		label variable n_units          "number of treated units averaged"
-		save `"`saveresults'/aggregate.dta"', replace
+		save `"`aggdir'/aggregate.dta"', replace
 
 		* overall ATT = mean of the average gap over post-treatment event times
 		qui summarize tr`sym'`depvar' if reltime >= 0, meanonly
 		local att_overall = r(mean)
+
+		* pooled (aggregate) pre-treatment RMSPE: pre-period fit of the averaged synthetic
+		qui gen double _pg2 = (tr`sym'`depvar')^2 if reltime < 0
+		qui summarize _pg2 if reltime < 0, meanonly
+		local pooled_rmspe = sqrt(r(mean))
+		qui drop _pg2
 
 		* aggregate event-study graphs (built silently via nodraw, saved as .gph)
 		if "`figure'" == "" {
@@ -710,14 +851,14 @@ program multisynth, eclass
 			       xtitle("event time (relative to treatment)") ytitle("`depvar'") ///
 			       legend(order(1 "Treated avg" 2 "Synthetic avg")) ///
 			       name(agg_pred, replace) nodraw
-			graph save agg_pred `"`saveresults'/aggregate_pred.gph"', replace
+			graph save agg_pred `"`aggdir'/aggregate_pred.gph"', replace
 			line tr`sym'`depvar' reltime, ///
 			       title("Average Treatment Effect (event time)") ///
 			       xline(-1, lp(dot) lc(black)) yline(0, lp(dot) lc(black)) ///
 			       xtitle("event time (relative to treatment)") ///
 			       ytitle("ATT on `depvar'") legend(off) ///
 			       name(agg_eff, replace) nodraw
-			graph save agg_eff `"`saveresults'/aggregate_eff.gph"', replace
+			graph save agg_eff `"`aggdir'/aggregate_eff.gph"', replace
 		}
 
 		* on-screen aggregate event-study table (post-treatment event times)
@@ -742,6 +883,7 @@ program multisynth, eclass
 		di as txt "{hline 11}{c +}{hline 35}"
 		di as txt %11s "Mean" "{c |}" as res %9.2f `tmean' %11.2f `smean' %10.3f `att_overall'
 		di as txt "{hline 11}{c BT}{hline 35}"
+		di as txt " Pooled pre-treatment RMSPE = " as res %6.4f `pooled_rmspe'
 		di as txt "{p 0 6 2}{txt}Note: The average treatment effect over the posttreatment period is{res} " %4.3f `att_overall' "{txt}.{p_end}"
 		if !`doinf' di as txt " (pooled p-value: add placebo(unit))"
 	}
@@ -755,9 +897,9 @@ program multisynth, eclass
 		tempname ipf
 		frame create `ipf'
 		frame `ipf' {
-			use `"`saveresults'/pvalues.dta"', clear
+			use `"`aggdir'/pvalues.dta"', clear
 			di as txt _newline "{hline 78}"
-			di as txt " Pooled permutation inference" as res "   (saved to `saveresults'/pvalues.dta)"
+			di as txt " Pooled permutation inference" as res "   (saved to `aggdir'/pvalues.dta)"
 			di as txt "{hline 78}"
 			di as txt " P-values compare the observed effect against " as res "`n_perms'" ///
 				as txt " placebo combinations." as txt "`cutmsg'"
@@ -782,9 +924,9 @@ program multisynth, eclass
 	* note saved outputs
 	di as txt _newline "{hline 78}"
 	di as txt " Saved in " as res "`saveresults'/" as txt ":"
-	di as txt "   summary.dta, aggregate.dta, v_matrix.dta, weights.dta"
-	di as txt "   per unit: unit#_data.dta, unit#_*.gph ;  aggregate_pred.gph, aggregate_eff.gph"
-	if `doinf' di as txt "   pooled: pvalues.dta" cond("`figure'"=="", ", pooled_pval{Two,Right,Left}_pboUnit.gph", "")
+	di as txt "   units/     : unit#_data.dta, unit#_*.gph  (one set per treated unit)"
+	di as txt "   aggregate/ : summary.dta, aggregate.dta, aggregate_pred.gph, aggregate_eff.gph, v_matrix.dta, weights.dta"
+	if `doinf' di as txt "                pvalues.dta" cond("`figure'"=="", ", pooled_pval{Two,Right,Left}_pboUnit.gph", "")
 
 	* minimal stored results
 	ereturn clear
@@ -801,6 +943,7 @@ program multisynth, eclass
 	ereturn scalar att_overall = `att_overall'
 	ereturn scalar ev_min      = `evlo'
 	ereturn scalar ev_max      = `evhi'
+	ereturn scalar pre_rmspe_pooled = `pooled_rmspe'
 	if `doinf' {
 		ereturn scalar pval_overall       = `p_ov2'
 		ereturn scalar pval_overall_right = `p_ovr'
@@ -809,7 +952,7 @@ program multisynth, eclass
 		ereturn local  pinf_window        "[0, `evhi']"
 	}
 
-	di as txt _newline "Finished. Ran multisynth for `nt' treated unit(s); per-unit output in `saveresults'/."
+	di as txt _newline "Finished. Ran multisynth for `nt' treated unit(s); output in `saveresults'/ (units/, aggregate/)."
 end
 
 program _multisynth_unit, eclass sortpreserve
@@ -835,7 +978,6 @@ program _multisynth_unit, eclass sortpreserve
 		sigf(passthru) ///
 		bound(passthru) ///
 		placebo(string) ///
-		loo ///
 		frame(string) ///
 		SAVEGraph(string) ///
 		noFIGure ///
@@ -1058,65 +1200,6 @@ program _multisynth_unit, eclass sortpreserve
 			frame(`frame') sym("`sym'") `xperiod' `mspeperiod' `placebo' `figure' `nested' `allopt' `margin' `maxiter' `sigf' `bound'
 		local graphlist = "`graphlist' `e(graphlist)'"
 		capture mat pval = e(pval)
-	}
-	/* Implement Robustness Test */
-	if("`loo'" != ""){
-		di _newline as txt "Implementing leave-one-out robustness test that excludes one control unit with a nonzero weight " _continue
-		local linePred ""
-		local lineEff ""
-		foreach loounit in `loounitlist'{
-			frame `frame': qui levelsof `panelVarStr' if `panelVar' == `loounit', local(unit_loo) clean
-			di as res "`unit_loo'"  as txt "..." _continue
-			qui levelsof `panelVar' if (`panelVar' != `trunit') & (`panelVar' != `loounit'), local(remunitlist)
-			qui cap varabbrev synth `anything', trunit(`trunit') trperiod(`trperiod') counit(`remunitlist') `xperiod' `mspeperiod' `customV' `margin' `maxiter' `sigf' `bound' `nested' `allopt'
-			if(_rc){
-			    error _rc
-				exit
-			}
-			frame `frame'{
-				qui cap gen pred`sym'`depvar'`sym'rmv`unit_loo' = .
-				qui label variable pred`sym'`depvar'`sym'rmv`unit_loo' "prediction of `depvar' (`unit_loo' excluded) generated by 'robustness test'"
-				mata: synth2_insertMatrix("`panelVar'", "`timeVar'", `trunit', st_matrix("e(Y_synthetic)"), "pred`sym'`depvar'`sym'rmv`unit_loo'")
-				qui cap gen tr`sym'`depvar'`sym'rmv`unit_loo' = `depvar' - pred`sym'`depvar'`sym'rmv`unit_loo'
-				qui label variable tr`sym'`depvar'`sym'rmv`unit_loo' "treatment effect on `depvar' (`unit_loo' excluded) generated by 'robustness test'"
-				local linePred " `linePred' (line pred`sym'`depvar'`sym'rmv`unit_loo' `timeVar', lc(gs8%20) lp(solid)) "
-				local lineEff " `lineEff' (line tr`sym'`depvar'`sym'rmv`unit_loo' `timeVar', lc(gs8%20) lp(solid)) "
-			}
-		}
-		di _newline _newline as txt "Leave-one-out robustness test results in the posttreatment period:"
-		frame `frame'{
-			mata: st_store(., (st_addvar("float", "pred`sym'`depvar'`sym'loomin"), st_addvar("float", "pred`sym'`depvar'`sym'loomax")), ///
-				rowminmax(st_data(., ("pred`sym'`depvar'`sym'rmv" :+ tokens("`unit_loolist'")))))
-			qui label variable pred`sym'`depvar'`sym'loomin "min prediction of `depvar' generated by 'robustness test'"
-			qui label variable pred`sym'`depvar'`sym'loomax "max prediction of `depvar' generated by 'robustness test'"
-			mata: st_store(., (st_addvar("float", "tr`sym'`depvar'`sym'loomin"), st_addvar("float", "tr`sym'`depvar'`sym'loomax")), ///
-				rowminmax(st_data(., ("tr`sym'`depvar'`sym'rmv" :+ tokens("`unit_loolist'")))))
-			qui label variable tr`sym'`depvar'`sym'loomin "min treatment effect on `depvar' generated by 'robustness test'"
-			qui label variable tr`sym'`depvar'`sym'loomax "max treatment effect on `depvar' generated by 'robustness test'"
-			mata: synth2_print3(st_sdata(., "`timeVarStr'"), ("Time", "Actual ", "Synthetic ", "Min ", "Max "), ("Outcome", "Synthetic Outcome (LOO)"), st_data(., "`depvar' pred`sym'`depvar' pred`sym'`depvar'`sym'loomin pred`sym'`depvar'`sym'loomax"), selectindex((st_data(., "`panelVar'") :== `trunit') :& (st_data(., "`timeVar'") :>= `trperiod')), 0, (10, 10, 10, 10), 0, 0)
-			di "{p 0 6 2}{txt}Note: The last two columns report the minimum and maximum synthetic outcomes when one control unit with a nonzero weight is excluded at a time.{p_end}"
-			di
-			mata: synth2_print2(st_sdata(., "`timeVarStr'"), ("Time", "Treatment Effect", "Min ", "Max "), "Treatment Effect (LOO)", st_data(., "tr`sym'`depvar' tr`sym'`depvar'`sym'loomin tr`sym'`depvar'`sym'loomax"), selectindex((st_data(., "`panelVar'") :== `trunit') :& (st_data(., "`timeVar'") :>= `trperiod')), 0, (18, 12, 12), 0, 0)
-			di "{p 0 6 2}{txt}Note: The last two columns report the minimum and maximum treatment effects when one control unit with a nonzero weight is excluded at a time.{p_end}"
-		}
-		if "`figure'" == ""{
-			frame `frame'{
-				qui mata: synth2_levelsof("`timeVar'", "temp")
-				loc pos: list posof "`trperiod'" in temp
-				loc pos = `pos' - 1
-				loc xline: word `pos' of `temp'
-				twoway (line `depvar' `timeVar', lp(solid)) (line pred`sym'`depvar' `timeVar', lp(dash)) `linePred' ///
-					if `panelVar' == `trunit', xline(`xline', lp(dot) lc(black)) title("Leave-one-out Robustness Test") ///
-					legend(order(1 "Actual" 2 "Synthetic" 3 "Synthetic (LOO)")  rows(1)) ///
-					name(pred_loo, replace) ytitle(`depvar') nodraw
-				twoway (line tr`sym'`depvar' `timeVar', lp(solid)) `lineEff' if `panelVar' == `trunit', ///
-					xline(`xline', lp(dot) lc(black)) yline(0, lp(dot) lc(black)) ///
-					title("Leave-one-out Robustness Test") name(eff_loo, replace) ///
-					ytitle("treatment effects on `depvar'") ///
-					legend(order(1 "Treatment Effect" 2 "Treatment Effect (LOO)")) nodraw
-				local graphlist = "`graphlist' pred_loo eff_loo"
-			}
-		}
 	}
 	/* Display graphs */
 	if "`figure'" == "" {
