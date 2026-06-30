@@ -1,0 +1,12 @@
+v 3
+d multisynth. Synthetic control method for multiple treated units, staggered
+d adoption, event-time aggregation, and pooled inference. Built on synth
+d (Abadie, Diamond & Hainmueller) and synth2 (Yan & Chen).
+d
+d Requires: synth (ssc install synth)
+d Author: Ivan Zapata, Texas Tech University
+d Support: email izapatad@ttu.edu
+d Distribution-Date: 20260630
+d
+f multisynth.ado
+f multisynth.sthlp

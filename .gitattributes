@@ -1,0 +1,18 @@
+# Normalize all text files to LF inside the repo (auto-detected)
+* text=auto eol=lf
+
+# Stata / project source files are text
+*.ado   text
+*.do    text
+*.sthlp text
+*.pkg   text
+*.toc   text
+*.md    text
+*.txt   text
+
+# Binary files — never convert line endings or diff/merge as text
+*.dta binary
+*.gph binary
+*.pdf binary
+*.png binary
+*.jpg binary
