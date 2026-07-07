@@ -24,6 +24,33 @@ Relative to `synth2` (which handles a single treated unit), `multisynth` adds:
 5. **Pooled permutation inference** — a Cavallo–Galiani–Noy style permutation test across treated units, reporting two-sided, right-sided, and left-sided p-values for each event time and for the overall ATT, with placebo-donor pruning by a pre-treatment-fit cutoff.
 6. **Organized output** — a compact per-unit summary, an aggregate event-time ATT table, and saved result datasets and graphs.
 
+## Installation
+
+You can install `multisynth` directly into Stata from this GitHub repository using `net install`. Run the following in Stata's Command window:
+
+```stata
+net install multisynth, from("https://raw.githubusercontent.com/ivzapata/multisynth/main/Code") replace
+```
+
+To confirm the install and view the documentation:
+
+```stata
+which multisynth
+help multisynth
+```
+
+`multisynth` requires that the `synth` package is also installed:
+
+```stata
+ssc install synth, replace
+```
+
+To update the package, re-run the `net install` command above (the `replace` option overwrites the existing files), or use:
+
+```stata
+adoupdate multisynth
+```
+
 ## Requirements
 
 - Stata 16 or later.
